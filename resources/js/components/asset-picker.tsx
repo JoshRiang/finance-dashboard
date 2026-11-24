@@ -1,5 +1,6 @@
 import { Check, ChevronsUpDown, Search } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { AssetLogo } from '@/components/asset-logo';
 import { cn } from '@/lib/utils';
 import type { CatalogItem } from '@/types/macro';
 
@@ -65,9 +66,7 @@ export function AssetPicker({
                     compact ? 'w-[150px]' : 'w-[190px]',
                 )}
             >
-                <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-[10px] font-bold text-primary uppercase">
-                    {value.slice(0, 2).replace('^', '')}
-                </span>
+                <AssetLogo symbol={value} size={24} />
                 <span className="flex min-w-0 flex-1 flex-col leading-tight">
                     <span className="truncate text-xs font-semibold">
                         {value}
@@ -127,11 +126,10 @@ export function AssetPicker({
                                                             : 'hover:bg-accent/60',
                                                     )}
                                                 >
-                                                    <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-primary/10 text-[10px] font-bold text-primary uppercase">
-                                                        {item.symbol
-                                                            .slice(0, 2)
-                                                            .replace('^', '')}
-                                                    </span>
+                                                    <AssetLogo
+                                                        symbol={item.symbol}
+                                                        size={24}
+                                                    />
                                                     <span className="min-w-0 flex-1">
                                                         <span className="block truncate text-xs font-semibold">
                                                             {item.symbol}

@@ -60,19 +60,28 @@ export function DeepChart({
     positive,
     timeframe,
     height = 300,
+    distribution,
+    distributionNormal,
+    distributionTone = 'neutral',
     className,
 }: {
     points: MarketPoint[];
     positive: boolean;
     timeframe: string;
     height?: number;
+    distribution?: { strike: number; density: number }[] | null;
+    distributionNormal?: { strike: number; density: number }[] | null;
+    distributionTone?: 'up' | 'down' | 'neutral';
     className?: string;
 }) {
     const containerRef = useRef<HTMLDivElement>(null);
     const [hover, setHover] = useState<number | null>(null);
 
     const width = 900;
-    const padRight = 60;
+    const hasDistribution = (distribution?.length ?? 0) > 1;
+    const axisWidth = 58;
+    const gutterWidth = hasDistribution ? 170 : 0;
+    const padRight = axisWidth + gutterWidth;
     const innerWidth = width - padRight;
 
     const geometry = useMemo(() => {
@@ -150,6 +159,60 @@ export function DeepChart({
               })
             : [];
 
+        const densityBase = innerWidth + axisWidth + 6;
+        const maxDensityWidth = Math.max(gutterWidth - 16, 0);
+
+        const densitySamples = (distribution ?? []).filter(
+            (sample) => sample.strike >= min && sample.strike <= max,
+        );
+
+        const normalLine =
+            hasDistribution && (distributionNormal?.length ?? 0) > 1
+                ? (distributionNormal ?? [])
+                      .filter(
+                          (sample) =>
+                              sample.strike >= min && sample.strike <= max,
+                      )
+                      .map(
+                          (sample) =>
+                              `${(densityBase + sample.density * maxDensityWidth).toFixed(2)},${y(sample.strike).toFixed(2)}`,
+                      )
+                      .join(' ')
+                : null;
+
+        const densityPolygon =
+            hasDistribution && densitySamples.length > 1
+                ? [
+                      `${densityBase.toFixed(2)},${y(min).toFixed(2)}`,
+                      ...densitySamples.map(
+                          (sample) =>
+                              `${(densityBase + sample.density * maxDensityWidth).toFixed(2)},${y(sample.strike).toFixed(2)}`,
+                      ),
+                      `${densityBase.toFixed(2)},${y(max).toFixed(2)}`,
+                  ].join(' ')
+                : null;
+
+        const densityBars = hasDistribution
+            ? densitySamples.map((sample, index) => {
+                  const previous =
+                      index === 0
+                          ? null
+                          : y(densitySamples[index - 1].strike);
+                  const current = y(sample.strike);
+                  const thickness =
+                      previous === null
+                          ? 2
+                          : Math.max(Math.abs(current - previous), 0.8);
+
+                  return {
+                      x: densityBase,
+                      y: Math.min(current, previous ?? current),
+                      width: Math.max(sample.density * maxDensityWidth, 0.4),
+                      height: thickness,
+                  };
+              })
+            : [];
+
         return {
             min,
             max,
@@ -158,13 +221,30 @@ export function DeepChart({
             grid,
             ticks,
             volumes,
+            densityPolygon,
+            densityBars,
+            normalLine,
+            densityBase,
+            axisLeftPercent: (innerWidth / width) * 100,
+            axisWidthPercent: (axisWidth / width) * 100,
             bottomAxis,
             padTop,
             priceBottom,
             x,
             y,
         };
-    }, [points, timeframe, height, innerWidth, width]);
+    }, [
+        points,
+        timeframe,
+        height,
+        innerWidth,
+        width,
+        distribution,
+        distributionNormal,
+        hasDistribution,
+        axisWidth,
+        gutterWidth,
+    ]);
 
     if (geometry === null) {
         return (
@@ -193,8 +273,9 @@ export function DeepChart({
             return;
         }
 
+        const chartWidth = rect.width * (innerWidth / width);
         const ratio = Math.min(
-            Math.max((event.clientX - rect.left) / rect.width, 0),
+            Math.max((event.clientX - rect.left) / chartWidth, 0),
             1,
         );
         const index = Math.round(ratio * (points.length - 1));
@@ -245,6 +326,57 @@ export function DeepChart({
                         }
                     />
                 ))}
+
+                {geometry.densityPolygon && (
+                    <>
+                        <line
+                            x1={geometry.densityBase}
+                            x2={geometry.densityBase}
+                            y1={geometry.padTop}
+                            y2={geometry.priceBottom}
+                            className="stroke-border"
+                            strokeWidth={1}
+                            vectorEffect="non-scaling-stroke"
+                        />
+                        <polygon
+                            points={geometry.densityPolygon}
+                            className={
+                                distributionTone === 'up'
+                                    ? 'fill-violet-500/20'
+                                    : distributionTone === 'down'
+                                      ? 'fill-rose-500/20'
+                                      : 'fill-slate-400/20'
+                            }
+                            strokeWidth={0}
+                        />
+                        {geometry.densityBars.map((bar, index) => (
+                            <rect
+                                key={index}
+                                x={bar.x}
+                                y={bar.y}
+                                width={bar.width}
+                                height={bar.height}
+                                className={
+                                    distributionTone === 'up'
+                                        ? 'fill-violet-500/70'
+                                        : distributionTone === 'down'
+                                          ? 'fill-rose-500/70'
+                                          : 'fill-slate-400/70'
+                                }
+                            />
+                        ))}
+                        {geometry.normalLine && (
+                            <polyline
+                                points={geometry.normalLine}
+                                fill="none"
+                                strokeDasharray="3 3"
+                                strokeWidth={1.25}
+                                vectorEffect="non-scaling-stroke"
+                                className="stroke-muted-foreground/60"
+                            />
+                        )}
+                    </>
+                )}
 
                 <polygon points={geometry.area} fill="url(#deep-chart-fill)" />
 
@@ -310,7 +442,13 @@ export function DeepChart({
                 )}
             </svg>
 
-            <div className="pointer-events-none absolute inset-y-0 right-0 w-14">
+            <div
+                className="pointer-events-none absolute inset-y-0"
+                style={{
+                    left: `${geometry.axisLeftPercent}%`,
+                    width: `${geometry.axisWidthPercent}%`,
+                }}
+            >
                 {geometry.grid.map((row, index) => (
                     <span
                         key={index}
@@ -331,6 +469,28 @@ export function DeepChart({
                 </span>
             </div>
 
+            {geometry.densityPolygon && (
+                <div className="pointer-events-none absolute top-0 right-0 flex flex-col items-end gap-1">
+                    <span className="rounded-sm border bg-card/80 px-1.5 py-0.5 text-[9px] font-semibold tracking-wide text-muted-foreground uppercase">
+                        Distribusi
+                    </span>
+                    <span className="flex items-center gap-1 rounded-sm bg-card/80 px-1.5 py-0.5 text-[9px] text-muted-foreground">
+                        <span
+                            className={
+                                distributionTone === 'up'
+                                    ? 'inline-block size-1.5 rounded-full bg-violet-500'
+                                    : distributionTone === 'down'
+                                      ? 'inline-block size-1.5 rounded-full bg-rose-500'
+                                      : 'inline-block size-1.5 rounded-full bg-slate-400'
+                            }
+                        />
+                        Skew
+                        <span className="inline-block h-0 w-3 border-t border-dashed border-muted-foreground/60" />
+                        Normal
+                    </span>
+                </div>
+            )}
+
             <div className="pointer-events-none absolute inset-x-0 bottom-0 h-4">
                 {geometry.ticks.map((tick, index) => (
                     <span
@@ -347,7 +507,7 @@ export function DeepChart({
                 <div
                     className="pointer-events-none absolute z-10 -translate-y-1/2 rounded-md border bg-popover px-2 py-1 text-xs shadow-md"
                     style={{
-                        left: `${Math.min(Math.max((hoverX / width) * 100, 8), 66)}%`,
+                        left: `${Math.min(Math.max((hoverX / width) * 100, 6), 52)}%`,
                         top: `${Math.min(Math.max((hoverY / height) * 100, 10), 88)}%`,
                     }}
                 >

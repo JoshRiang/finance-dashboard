@@ -20,6 +20,26 @@ export interface GexExpiration {
     dte: number;
 }
 
+export interface DistributionPoint {
+    strike: number;
+    density: number;
+}
+
+export interface GexDistribution {
+    bias: number;
+    direction: 'up' | 'down' | 'neutral';
+    skew: number;
+    sigma: number;
+    mean: number;
+    spot: number;
+    gamma_flip: number | null;
+    contributions: Record<'gex' | 'dex' | 'vex' | 'chex', number>;
+    points: DistributionPoint[];
+    normal: DistributionPoint[];
+}
+
+export type GexMetric = 'gex' | 'dex' | 'vex' | 'chex';
+
 export interface GexAnalysis {
     symbol: string;
     label: string;
@@ -53,4 +73,5 @@ export interface GexAnalysis {
     };
     expirations: GexExpiration[];
     strikes: GexStrike[];
+    distribution: GexDistribution;
 }

@@ -40,6 +40,31 @@ class MacroService
         ['symbol' => 'EURUSD=X', 'label' => 'EUR/USD', 'region' => 'world', 'group' => 'Valuta'],
         ['symbol' => 'JPY=X', 'label' => 'USD/JPY', 'region' => 'world', 'group' => 'Valuta'],
         ['symbol' => 'GBPUSD=X', 'label' => 'GBP/USD', 'region' => 'world', 'group' => 'Valuta'],
+
+        ['symbol' => '^VIX', 'label' => 'VIX', 'region' => 'americas', 'group' => 'Volatilitas'],
+        ['symbol' => '^TNX', 'label' => 'US 10Y Yield', 'region' => 'americas', 'group' => 'Obligasi'],
+        ['symbol' => 'TLT', 'label' => 'US 20Y Bonds', 'region' => 'americas', 'group' => 'Obligasi'],
+        ['symbol' => 'SPY', 'label' => 'SPDR S&P 500', 'region' => 'americas', 'group' => 'ETF'],
+        ['symbol' => 'QQQ', 'label' => 'Invesco QQQ', 'region' => 'americas', 'group' => 'ETF'],
+        ['symbol' => 'IWM', 'label' => 'iShares Russell', 'region' => 'americas', 'group' => 'ETF'],
+        ['symbol' => 'GLD', 'label' => 'SPDR Gold', 'region' => 'americas', 'group' => 'ETF'],
+        ['symbol' => 'UUP', 'label' => 'Invesco Dollar', 'region' => 'americas', 'group' => 'ETF'],
+        ['symbol' => 'NVDA', 'label' => 'NVIDIA', 'region' => 'americas', 'group' => 'Saham'],
+        ['symbol' => 'AAPL', 'label' => 'Apple', 'region' => 'americas', 'group' => 'Saham'],
+        ['symbol' => 'MSFT', 'label' => 'Microsoft', 'region' => 'americas', 'group' => 'Saham'],
+        ['symbol' => 'TSLA', 'label' => 'Tesla', 'region' => 'americas', 'group' => 'Saham'],
+        ['symbol' => '^FCHI', 'label' => 'CAC 40', 'region' => 'world', 'group' => 'Indeks'],
+        ['symbol' => '^STOXX50E', 'label' => 'Euro Stoxx 50', 'region' => 'world', 'group' => 'Indeks'],
+        ['symbol' => '^KS11', 'label' => 'KOSPI', 'region' => 'world', 'group' => 'Indeks'],
+        ['symbol' => '^AXJO', 'label' => 'ASX 200', 'region' => 'world', 'group' => 'Indeks'],
+        ['symbol' => '^NSEI', 'label' => 'Nifty 50', 'region' => 'world', 'group' => 'Indeks'],
+        ['symbol' => '^BVSP', 'label' => 'Bovespa', 'region' => 'world', 'group' => 'Indeks'],
+        ['symbol' => 'PL=F', 'label' => 'Platinum', 'region' => 'world', 'group' => 'Komoditas'],
+        ['symbol' => 'ZC=F', 'label' => 'Jagung', 'region' => 'world', 'group' => 'Komoditas'],
+        ['symbol' => 'KC=F', 'label' => 'Kopi', 'region' => 'world', 'group' => 'Komoditas'],
+        ['symbol' => 'AUDUSD=X', 'label' => 'AUD/USD', 'region' => 'world', 'group' => 'Valuta'],
+        ['symbol' => 'XRP-USD', 'label' => 'XRP', 'region' => 'world', 'group' => 'Kripto'],
+        ['symbol' => 'DOGE-USD', 'label' => 'Dogecoin', 'region' => 'world', 'group' => 'Kripto'],
     ];
 
     /**
@@ -112,14 +137,21 @@ class MacroService
      */
     public function overview(): array
     {
-        $markets = $this->markets();
+        $markets = $this->marketsFor([
+            '^GSPC',
+            '^IXIC',
+            '^DJI',
+            'DX-Y.NYB',
+            'IDR=X',
+            'GC=F',
+            'CL=F',
+            'BTC-USD',
+        ]);
+
         $indicators = $this->indicators();
 
         return [
-            'markets' => array_values(array_filter(
-                $markets,
-                static fn (array $market): bool => in_array($market['symbol'], ['^GSPC', '^IXIC', '^DJI', 'DX-Y.NYB', 'IDR=X', 'GC=F', 'CL=F', 'BTC-USD'], true),
-            )),
+            'markets' => $markets,
             'indicators' => [
                 'americas' => [
                     'label' => self::COUNTRIES['USA']['label'],
@@ -138,7 +170,25 @@ class MacroService
      */
     public function markets(): array
     {
-        return $this->remember(self::MARKET_CACHE_KEY, fn (): array => $this->fetchMarkets());
+        return $this->remember(self::MARKET_CACHE_KEY, fn (): array => $this->fetchMarkets(self::INSTRUMENTS));
+    }
+
+    /**
+     * Fetch only a subset of instruments (used by the dashboard preview).
+     *
+     * @param  array<int, string>  $symbols
+     * @return array<int, array<string, mixed>>
+     */
+    public function marketsFor(array $symbols): array
+    {
+        $instruments = array_values(array_filter(
+            self::INSTRUMENTS,
+            static fn (array $instrument): bool => in_array($instrument['symbol'], $symbols, true),
+        ));
+
+        $key = self::MARKET_CACHE_KEY.'.'.md5(implode(',', $symbols));
+
+        return $this->remember($key, fn (): array => $this->fetchMarkets($instruments));
     }
 
     /**
@@ -373,12 +423,12 @@ class MacroService
     /**
      * @return array<int, array{symbol: string, label: string, region: string, group: string, name: string, currency: string, price: float, day_change: float, range_change: float, week_52_high: float|null, week_52_low: float|null, volume: int|null, points: array<int, float>}>
      */
-    private function fetchMarkets(): array
+    private function fetchMarkets(array $instruments): array
     {
-        $responses = Http::pool(function (Pool $pool): array {
+        $responses = Http::pool(function (Pool $pool) use ($instruments): array {
             $requests = [];
 
-            foreach (self::INSTRUMENTS as $index => $instrument) {
+            foreach ($instruments as $index => $instrument) {
                 $url = sprintf(
                     'https://query1.finance.yahoo.com/v8/finance/chart/%s?range=%s&interval=1d',
                     rawurlencode($instrument['symbol']),
@@ -398,7 +448,7 @@ class MacroService
 
         $markets = [];
 
-        foreach (self::INSTRUMENTS as $index => $instrument) {
+        foreach ($instruments as $index => $instrument) {
             $response = $responses[$index] ?? null;
 
             if (! $response instanceof Response || ! $response->successful()) {

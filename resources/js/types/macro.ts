@@ -90,3 +90,24 @@ export interface CountryDetail {
     indicators: IndicatorSeries[];
     world: Record<string, number>;
 }
+
+export interface DistributionSample {
+    strike: number;
+    density: number;
+}
+
+export interface MarketDistributionResponse {
+    symbol: string | null;
+    distribution: {
+        bias: number;
+        direction: 'up' | 'down' | 'neutral';
+        skew: number;
+        sigma: number;
+        mean: number;
+        spot: number;
+        gamma_flip: number | null;
+        contributions: Record<string, number>;
+        points: DistributionSample[];
+        normal: DistributionSample[];
+    } | null;
+}

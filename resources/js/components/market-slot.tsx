@@ -1,10 +1,14 @@
-import { TrendingDown, TrendingUp } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { TrendingDown, TrendingUp, Waves } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { AssetPicker } from '@/components/asset-picker';
 import { DeepChart } from '@/components/deep-chart';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
-import type { CatalogItem, MarketSeries } from '@/types/macro';
+import type {
+    CatalogItem,
+    MarketDistributionResponse,
+    MarketSeries,
+} from '@/types/macro';
 
 const TIMEFRAMES = ['1D', '5D', '1M', '3M', '6M', '1Y', '5Y', 'MAX'];
 
@@ -68,6 +72,84 @@ export function MarketSlot({
     const [loading, setLoading] = useState(true);
     const [failed, setFailed] = useState(false);
     const requestId = useRef(0);
+
+    const [showDistribution, setShowDistribution] = useState(true);
+    const [distribution, setDistribution] = useState<
+        MarketDistributionResponse['distribution']
+    >(null);
+    const [distLoading, setDistLoading] = useState(false);
+    const [distUnavailable, setDistUnavailable] = useState(false);
+    const distCache = useRef<Record<string, MarketDistributionResponse>>({});
+
+    const loadDistribution = async (target: string) => {
+        if (distCache.current[target]) {
+            const cached = distCache.current[target];
+
+            setDistribution(cached.distribution);
+            setDistUnavailable(cached.distribution === null);
+
+            return;
+        }
+
+        setDistLoading(true);
+
+        try {
+            const response = await fetch(
+                `/pasar/distribution?symbol=${encodeURIComponent(target)}`,
+                {
+                    headers: { Accept: 'application/json' },
+                    credentials: 'same-origin',
+                },
+            );
+            const data =
+                (await response.json()) as MarketDistributionResponse;
+
+            distCache.current[target] = data;
+            setDistribution(data.distribution);
+            setDistUnavailable(data.distribution === null);
+        } catch {
+            setDistribution(null);
+            setDistUnavailable(true);
+        } finally {
+            setDistLoading(false);
+        }
+    };
+
+    useEffect(() => {
+        setDistribution(null);
+        setDistUnavailable(false);
+        setShowDistribution(true);
+        void loadDistribution(symbol);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [symbol]);
+
+    const toggleDistribution = () => {
+        if (distUnavailable) {
+            return;
+        }
+
+        setShowDistribution((state) => !state);
+    };
+
+    const overlay = useMemo(() => {
+        if (!showDistribution || !distribution || !series) {
+            return { skew: null, normal: null };
+        }
+
+        const scale =
+            distribution.spot > 0 ? series.price / distribution.spot : 1;
+
+        return {
+            skew: distribution.points.map((sample) => ({
+                strike: sample.strike * scale,
+                density: sample.density,
+            })),
+            normal: (distribution.normal ?? []).map((sample) => ({
+                strike: sample.strike * scale,
+                density: sample.density,
+            })),
+        };
+    }, [showDistribution, distribution, series]);
 
     useEffect(() => {
         const id = ++requestId.current;
@@ -160,7 +242,7 @@ export function MarketSlot({
                 )}
             </div>
 
-            <div className="flex flex-wrap gap-0.5">
+            <div className="flex flex-wrap items-center gap-1">
                 {TIMEFRAMES.map((option) => (
                     <button
                         key={option}
@@ -176,6 +258,33 @@ export function MarketSlot({
                         {option}
                     </button>
                 ))}
+
+                <span className="mx-0.5 h-4 w-px bg-border" />
+                <button
+                    type="button"
+                    onClick={toggleDistribution}
+                    disabled={distUnavailable}
+                    title={
+                        distUnavailable
+                            ? 'Distribusi tidak tersedia untuk aset ini'
+                            : 'Tampilkan/sembunyikan distribusi dealer (GEX)'
+                    }
+                    className={cn(
+                        'inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] font-medium transition',
+                        distUnavailable
+                            ? 'cursor-not-allowed text-muted-foreground/40 line-through'
+                            : showDistribution
+                              ? 'bg-violet-500/15 text-violet-600 dark:text-violet-400'
+                              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+                    )}
+                >
+                    {distLoading ? (
+                        <Spinner className="size-3" />
+                    ) : (
+                        <Waves className="size-3" />
+                    )}
+                    Distribusi
+                </button>
             </div>
 
             <div className="relative">
@@ -185,6 +294,9 @@ export function MarketSlot({
                         positive={series.range_change >= 0}
                         timeframe={timeframe}
                         height={height}
+                        distribution={overlay.skew}
+                        distributionNormal={overlay.normal}
+                        distributionTone={distribution?.direction ?? 'neutral'}
                         className={loading ? 'opacity-50' : ''}
                     />
                 ) : (

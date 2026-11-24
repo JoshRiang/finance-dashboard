@@ -3,6 +3,7 @@
 namespace Tests\Feature;
 
 use App\Models\User;
+use App\Services\GexService;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Illuminate\Support\Facades\Http;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -70,6 +71,81 @@ class GexTest extends TestCase
     public function test_gex_page_requires_authentication()
     {
         $this->get(route('gex'))->assertRedirect(route('login'));
+    }
+
+    public function test_analysis_exposes_a_skewed_distribution()
+    {
+        $this->fakeSources();
+
+        $analysis = app(GexService::class)->analysis('GLD');
+
+        $this->assertArrayHasKey('distribution', $analysis);
+
+        $distribution = $analysis['distribution'];
+
+        $this->assertContains($distribution['direction'], ['up', 'down', 'neutral']);
+        $this->assertGreaterThanOrEqual(-1, $distribution['bias']);
+        $this->assertLessThanOrEqual(1, $distribution['bias']);
+        $this->assertSame(['gex', 'dex', 'vex', 'chex'], array_keys($distribution['contributions']));
+        $this->assertGreaterThan(10, count($distribution['points']));
+        $this->assertArrayHasKey('strike', $distribution['points'][0]);
+        $this->assertArrayHasKey('density', $distribution['points'][0]);
+    }
+
+    public function test_distribution_page_renders()
+    {
+        $this->fakeSources();
+
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        $this->get(route('gex.distribution', ['symbol' => 'GLD']))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('gex/distribution')
+                ->where('symbol', 'GLD')
+                ->has('analysis.distribution.points')
+                ->has('analysis.distribution.contributions')
+            );
+    }
+
+    public function test_distribution_page_requires_authentication()
+    {
+        $this->get(route('gex.distribution'))->assertRedirect(route('login'));
+    }
+
+    public function test_each_metric_page_renders_its_own_ladder()
+    {
+        $this->fakeSources();
+
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        $pages = [
+            'gex.gamma' => 'gex',
+            'gex.delta' => 'dex',
+            'gex.vanna' => 'vex',
+            'gex.charm' => 'chex',
+        ];
+
+        foreach ($pages as $routeName => $metric) {
+            $this->get(route($routeName, ['symbol' => 'GLD']))
+                ->assertOk()
+                ->assertInertia(fn (Assert $page) => $page
+                    ->component('gex/metric')
+                    ->where('metric', $metric)
+                    ->where('symbol', 'GLD')
+                    ->has('analysis.strikes')
+                );
+        }
+    }
+
+    public function test_metric_pages_require_authentication()
+    {
+        $this->get(route('gex.gamma'))->assertRedirect(route('login'));
+        $this->get(route('gex.delta'))->assertRedirect(route('login'));
+        $this->get(route('gex.vanna'))->assertRedirect(route('login'));
+        $this->get(route('gex.charm'))->assertRedirect(route('login'));
     }
 
     public function test_gex_page_renders_when_option_data_is_unavailable()

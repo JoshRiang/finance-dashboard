@@ -37,6 +37,22 @@ class GexService
 
     private const DEFAULT_SYMBOL = 'GLD';
 
+    /**
+     * Map market-chart symbols to the closest optionable instrument.
+     *
+     * @var array<string, string>
+     */
+    private const ALIASES = [
+        '^GSPC' => 'SPY',
+        '^IXIC' => 'QQQ',
+        '^RUT' => 'IWM',
+        'GC=F' => 'GLD',
+        'SI=F' => 'SLV',
+        'CL=F' => 'USO',
+        'BZ=F' => 'USO',
+        'DX-Y.NYB' => 'UUP',
+    ];
+
     private const MAX_EXPIRATIONS = 6;
 
     private const RISK_FREE_RATE = 0.043;
@@ -77,6 +93,39 @@ class GexService
     public function supports(string $symbol): bool
     {
         return isset(self::INSTRUMENTS[strtoupper($symbol)]);
+    }
+
+    /**
+     * Resolve the optionable instrument used to derive a distribution for a
+     * market-chart symbol, or null when no chain is available.
+     */
+    public function aliasFor(string $symbol): ?string
+    {
+        $symbol = strtoupper($symbol);
+
+        if ($this->supports($symbol)) {
+            return $symbol;
+        }
+
+        $alias = self::ALIASES[$symbol] ?? null;
+
+        return $alias !== null && $this->supports($alias) ? $alias : null;
+    }
+
+    /**
+     * Market symbols that have an option chain behind them.
+     *
+     * @return array<int, string>
+     */
+    public function distributionSymbols(): array
+    {
+        $symbols = array_keys(self::ALIASES);
+
+        foreach (array_keys(self::INSTRUMENTS) as $symbol) {
+            $symbols[] = $symbol;
+        }
+
+        return array_values(array_unique($symbols));
     }
 
     /**
@@ -257,6 +306,7 @@ class GexService
                 'lower' => $expectedMove === null ? null : round($spotPrice - $expectedMove, 2),
                 'value' => $expectedMove === null ? null : round($expectedMove, 2),
             ],
+            'distribution' => $this->distribution($strikes, $chartStrikes, $spotPrice, $expectedMove, $gammaFlip),
             'flow' => [
                 'call_oi' => $callOi,
                 'put_oi' => $putOi,
@@ -629,6 +679,112 @@ class GexService
         }
 
         return ($call ?? 0) + ($put ?? 0);
+    }
+
+    /**
+     * Build a skew-normal density over the strike range. The skew is derived
+     * from the combined directional signal of GEX, DEX, VEX, and CHEX.
+     *
+     * @param  array<int|string, array<string, mixed>>  $strikes
+     * @param  array<int, array<string, mixed>>  $chartStrikes
+     * @return array<string, mixed>
+     */
+    private function distribution(array $strikes, array $chartStrikes, float $spot, ?float $expectedMove, ?float $gammaFlip): array
+    {
+        $metrics = ['gex', 'dex', 'vex', 'chex'];
+        $totals = array_fill_keys($metrics, 0.0);
+        $absolute = array_fill_keys($metrics, 0.0);
+
+        foreach ($strikes as $row) {
+            foreach ($metrics as $metric) {
+                $value = (float) ($row[$metric] ?? 0);
+                $totals[$metric] += $value;
+                $absolute[$metric] += abs($value);
+            }
+        }
+
+        $contributions = [];
+
+        foreach ($metrics as $metric) {
+            $contributions[$metric] = $absolute[$metric] > 0
+                ? round($totals[$metric] / $absolute[$metric], 4)
+                : 0.0;
+        }
+
+        $bias = array_sum($contributions) / count($metrics);
+        $bias = max(-1.0, min(1.0, $bias));
+
+        $direction = match (true) {
+            $bias > 0.05 => 'up',
+            $bias < -0.05 => 'down',
+            default => 'neutral',
+        };
+
+        $sigma = $expectedMove && $expectedMove > 0 ? $expectedMove : $spot * 0.01;
+        $sigma = max($sigma, $spot * 0.002);
+        $mean = $spot + $bias * $sigma * 0.8;
+        $alpha = $bias * 3.0;
+
+        $min = $chartStrikes !== [] ? (float) $chartStrikes[0]['strike'] : $spot * 0.9;
+        $max = $chartStrikes !== [] ? (float) $chartStrikes[array_key_last($chartStrikes)]['strike'] : $spot * 1.1;
+
+        if ($max <= $min) {
+            $min = $spot * 0.9;
+            $max = $spot * 1.1;
+        }
+
+        $steps = 80;
+        $samples = [];
+        $normalSamples = [];
+        $peak = 0.0;
+        $normalPeak = 0.0;
+
+        for ($index = 0; $index <= $steps; $index++) {
+            $strike = $min + (($max - $min) * $index) / $steps;
+
+            $density = $this->skewNormalPdf($strike, $mean, $sigma, $alpha);
+            $normalDensity = $this->normalPdf(($strike - $spot) / $sigma) / $sigma;
+
+            $peak = max($peak, $density);
+            $normalPeak = max($normalPeak, $normalDensity);
+
+            $samples[] = ['strike' => round($strike, 2), 'density' => $density];
+            $normalSamples[] = ['strike' => round($strike, 2), 'density' => $normalDensity];
+        }
+
+        $points = array_map(static fn (array $sample): array => [
+            'strike' => $sample['strike'],
+            'density' => $peak > 0 ? round($sample['density'] / $peak, 4) : 0.0,
+        ], $samples);
+
+        $normalPoints = array_map(static fn (array $sample): array => [
+            'strike' => $sample['strike'],
+            'density' => $normalPeak > 0 ? round($sample['density'] / $normalPeak, 4) : 0.0,
+        ], $normalSamples);
+
+        return [
+            'bias' => round($bias, 4),
+            'direction' => $direction,
+            'skew' => round($alpha, 3),
+            'sigma' => round($sigma, 4),
+            'mean' => round($mean, 2),
+            'spot' => round($spot, 2),
+            'gamma_flip' => $gammaFlip === null ? null : round($gammaFlip, 2),
+            'contributions' => $contributions,
+            'points' => $points,
+            'normal' => $normalPoints,
+        ];
+    }
+
+    private function skewNormalPdf(float $x, float $mean, float $sigma, float $alpha): float
+    {
+        if ($sigma <= 0) {
+            return 0.0;
+        }
+
+        $z = ($x - $mean) / $sigma;
+
+        return (2 / $sigma) * $this->normalPdf($z) * $this->normalCdf($alpha * $z);
     }
 
     private function daysToExpiration(?int $timestamp): int

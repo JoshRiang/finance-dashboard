@@ -2,11 +2,16 @@ import { Link } from '@inertiajs/react';
 import {
     Activity,
     BarChart3,
+    Clock,
     Database,
+    Gauge,
     Globe,
     LayoutGrid,
     LineChart,
     Newspaper,
+    Sparkles,
+    TrendingUp,
+    Waves,
 } from 'lucide-react';
 import AppLogo from '@/components/app-logo';
 import { NavFooter } from '@/components/nav-footer';
@@ -22,6 +27,13 @@ import {
     SidebarMenuItem,
 } from '@/components/ui/sidebar';
 import { berita, dashboard, gex, indikator, pasar } from '@/routes';
+import {
+    charm,
+    delta,
+    distribution,
+    gamma,
+    vanna,
+} from '@/routes/gex';
 import type { NavItem } from '@/types';
 
 const primaryNavItems: NavItem[] = [
@@ -48,10 +60,38 @@ const analysisNavItems: NavItem[] = [
         href: indikator(),
         icon: BarChart3,
     },
+];
+
+const gexNavItems: NavItem[] = [
     {
-        title: 'Dealer GEX',
+        title: 'Ringkasan',
         href: gex(),
         icon: Activity,
+    },
+    {
+        title: 'GEX',
+        href: gamma(),
+        icon: Gauge,
+    },
+    {
+        title: 'DEX',
+        href: delta(),
+        icon: TrendingUp,
+    },
+    {
+        title: 'VEX',
+        href: vanna(),
+        icon: Waves,
+    },
+    {
+        title: 'CHEX',
+        href: charm(),
+        icon: Clock,
+    },
+    {
+        title: 'Distribusi',
+        href: distribution(),
+        icon: Sparkles,
     },
 ];
 
@@ -86,6 +126,7 @@ export function AppSidebar() {
             <SidebarContent className="gap-1">
                 <NavMain items={primaryNavItems} label="Utama" />
                 <NavMain items={analysisNavItems} label="Analisis" />
+                <NavMain items={gexNavItems} label="Dealer Positioning" />
             </SidebarContent>
 
             <SidebarFooter>

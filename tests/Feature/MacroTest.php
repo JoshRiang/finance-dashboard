@@ -19,7 +19,7 @@ class MacroTest extends TestCase
 
         $markets = app(MacroService::class)->markets();
 
-        $this->assertCount(23, $markets);
+        $this->assertCount(47, $markets);
         $this->assertSame('^GSPC', $markets[0]['symbol']);
         $this->assertSame('S&P 500', $markets[0]['label']);
         $this->assertSame('Indeks', $markets[0]['group']);
@@ -80,7 +80,7 @@ class MacroTest extends TestCase
             ->assertOk()
             ->assertInertia(fn (Assert $page) => $page
                 ->component('pasar/index')
-                ->has('catalog', 23)
+                ->has('catalog', 47)
                 ->where('catalog.0.label', 'S&P 500')
                 ->where('catalog.0.group', 'Indeks')
                 ->missing('catalog.0.points')
@@ -117,6 +117,53 @@ class MacroTest extends TestCase
 
         $this->getJson(route('pasar.series', ['symbol' => '^GSPC', 'timeframe' => '9Y']))
             ->assertNotFound();
+    }
+
+    public function test_pasar_page_exposes_which_symbols_have_distributions()
+    {
+        $this->fakeSources();
+
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        $this->get(route('pasar'))
+            ->assertOk()
+            ->assertInertia(fn (Assert $page) => $page
+                ->component('pasar/index')
+                ->has('distributionSymbols')
+                ->where('distributionSymbols.0', '^GSPC')
+            );
+    }
+
+    public function test_distribution_endpoint_returns_scaled_payload_for_a_mapped_symbol()
+    {
+        $this->fakeSources();
+
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        $response = $this->getJson(route('pasar.distribution', ['symbol' => '^GSPC']))
+            ->assertOk()
+            ->assertJsonPath('symbol', 'SPY');
+
+        $this->assertContains(
+            $response->json('distribution.direction'),
+            ['up', 'down', 'neutral'],
+        );
+        $this->assertNotEmpty($response->json('distribution.points'));
+    }
+
+    public function test_distribution_endpoint_returns_null_for_unmapped_symbols()
+    {
+        $this->fakeSources();
+
+        $user = User::factory()->create();
+        $this->actingAs($user);
+
+        $this->getJson(route('pasar.distribution', ['symbol' => 'BTC-USD']))
+            ->assertOk()
+            ->assertJsonPath('symbol', null)
+            ->assertJsonPath('distribution', null);
     }
 
     public function test_indikator_page_shows_all_countries()
@@ -191,8 +238,46 @@ class MacroTest extends TestCase
     private function fakeSources(): void
     {
         Http::fake([
+            'https://fc.yahoo.com*' => Http::response('', 200),
+            'https://query1.finance.yahoo.com/v1/test/getcrumb*' => Http::response('testcrumb', 200),
+            'https://query1.finance.yahoo.com/v7/finance/options/*' => Http::response($this->chainPayload(), 200),
             'https://query1.finance.yahoo.com/*' => Http::response($this->yahooPayload(), 200),
             'https://api.worldbank.org/*' => Http::response($this->worldBankPayload(), 200),
+        ]);
+    }
+
+    private function chainPayload(): string
+    {
+        $nearest = now()->addDay()->startOfDay()->getTimestamp();
+
+        $contract = static fn (float $strike, int $oi, float $iv): array => [
+            'strike' => $strike,
+            'openInterest' => $oi,
+            'impliedVolatility' => $iv,
+            'volume' => 10,
+            'bid' => 1.0,
+            'ask' => 1.2,
+            'lastPrice' => 1.1,
+        ];
+
+        return json_encode([
+            'optionChain' => [
+                'result' => [[
+                    'expirationDates' => [$nearest],
+                    'options' => [[
+                        'expirationDate' => $nearest,
+                        'calls' => [
+                            $contract(330, 5000, 0.28),
+                            $contract(340, 3000, 0.25),
+                        ],
+                        'puts' => [
+                            $contract(330, 4000, 0.30),
+                            $contract(320, 6000, 0.32),
+                        ],
+                    ]],
+                ]],
+                'error' => null,
+            ],
         ]);
     }
 
@@ -205,6 +290,7 @@ class MacroTest extends TestCase
                         'currency' => 'USD',
                         'shortName' => 'S&P 500',
                         'regularMarketChangePercent' => 1.5,
+                        'regularMarketPrice' => 105.0,
                         'fiftyTwoWeekHigh' => 120,
                         'fiftyTwoWeekLow' => 90,
                         'regularMarketVolume' => 1000000,
